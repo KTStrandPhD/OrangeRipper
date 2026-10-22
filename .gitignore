@@ -1,0 +1,29 @@
+# Python Bytecode & Caches
+__pycache__/
+*.py[cod]
+*$py.class
+.ipynb_checkpoints/
+
+# Bins
+bin/
+
+# Virtual Environments
+.venv/
+env/
+venv/
+ENV/
+
+# PyInstaller Build Artifacts & Distribution Folders
+build/
+dist/
+*.spec
+
+# Local Logs & Runtime Temp Files
+orangeripper_debug.log
+*.log
+temp_*.wav
+
+# OS Specific Files
+.DS_Store
+Thumbs.db
+Desktop.ini

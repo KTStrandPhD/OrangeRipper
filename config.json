@@ -1,0 +1,13 @@
+{
+    "discogs": {
+        "user_token": "OjTjPLRkyHtDIaXNObNeqkZHVUSIJmjrEirRhiJs"
+    },
+    "acoustid": {
+        "api_key": "JFLtoKPBbe"
+    },
+    "ripping": {
+        "output_dir": "Music",
+        "audio_format": "MP3",
+        "encoding_quality": "320 kbps (Best MP3)"
+    }
+}

@@ -1,0 +1,3 @@
+#!/bin/bash
+# OrangeRipper Installer Wrapper
+python3 install.py
