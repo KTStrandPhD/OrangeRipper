@@ -95,7 +95,6 @@ This script cleans old caches, provisions the virtual environment, executes PyIn
 OrangeRipper is developed and maintained by Kyle T Strand.
 
 * **Email:** [kyletstrand@gmail.com](mailto:kyletstrand@gmail.com)
-* **Organization:** Orange Records
 
 If OrangeRipper has streamlined your archiving or listening workflow, consider fueling future updates or buying a coffee!
 
