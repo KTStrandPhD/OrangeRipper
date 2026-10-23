@@ -7,7 +7,7 @@ import os
 class MetadataManager:
     def __init__(self, discogs_token: str = None, acoustid_key: str = None):
         self.mb_service = MusicBrainzService()
-        #self.discogs_service = DiscogsService(user_token=discogs_token) if discogs_token else None
+        self.discogs_service = DiscogsService(user_token=discogs_token) if discogs_token else None
         #self.discogs_service = None                   # comment the line above and uncomment this line to turn off discogs search
         self.acoustid_service = AcoustIDService(api_key=acoustid_key) if acoustid_key else None
 
