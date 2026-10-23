@@ -48,7 +48,7 @@ class CDRipper:
     def _log(self, message: str):
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         formatted_msg = f"[OrangeRipper Debug {timestamp}] {message}"
-        print(formatted_msg)
+        #print(formatted_msg)
         
         try:
             if getattr(sys, 'frozen', False):

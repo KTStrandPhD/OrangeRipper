@@ -3,7 +3,7 @@ import json
 import requests
 import platform
 import ctypes
-from PyQt6.QtGui import QPixmap, QImage, QAction, QIcon
+from PyQt6.QtGui import QPixmap, QImage, QAction, QIcon, QGuiApplication
 from PyQt6.QtCore import Qt, QCoreApplication, QTimer, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
@@ -33,6 +33,20 @@ def load_config():
         rip_conf["output_dir"] = os.path.join(os.path.expanduser("~"), "Music")
 
     return config
+
+class AcoustIDWorker(QThread):
+    """Background worker thread to handle the time-intensive AcoustID sample rip and lookup."""
+    finished = pyqtSignal(dict)
+    progress = pyqtSignal(str)
+
+    def __init__(self, meta_manager):
+        super().__init__()
+        self.meta_manager = meta_manager
+
+    def run(self):
+        self.progress.emit("Initializing AcoustID Fingerprinting (ripping sample track)...")
+        result = self.meta_manager.fetch_acoustid_metadata()
+        self.finished.emit(result)
 
 class MetadataWorker(QThread):
     """Background worker thread to handle CD scanning and metadata lookups without freezing the GUI."""
@@ -75,6 +89,9 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("OrangeRipper - CD Ripping Utility")
         self.resize(800, 600)
 
+        # Ensure Linux window manager maps to our .desktop file entry name
+        QGuiApplication.setDesktopFileName("orangeripper")
+
         # --- Menu Bar ---
         menubar = self.menuBar()
         file_menu = menubar.addMenu("File")
@@ -100,12 +117,20 @@ class MainWindow(QMainWindow):
 
         self.init_ui()
 
-        # Set Application Icon
-        icon_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "app.ico")
+        # Set Application & Window Icon with cross-platform support (PNG preferred for Linux)
+        project_root = os.path.dirname(os.path.abspath(__file__))
+        icon_path = os.path.join(project_root, "..", "assets", "app.png")
         if not os.path.exists(icon_path):
-            icon_path = "assets/app.ico" # Fallback relative path
+            icon_path = "assets/app.png"  # Fallback relative path
+            
+        # Fallback to .ico if .png is missing
+        if not os.path.exists(icon_path):
+            icon_path = icon_path.replace(".png", ".ico")
+
         if os.path.exists(icon_path):
-            self.setWindowIcon(QIcon(icon_path))
+            app_icon = QIcon(icon_path)
+            self.setWindowIcon(app_icon)
+            QGuiApplication.setWindowIcon(app_icon)
 
         # --- Automatic Disc Polling Timer ---
         self.disc_timer = QTimer(self)
@@ -412,10 +437,11 @@ class MainWindow(QMainWindow):
 
         discid = response.get("discid")
         self.last_discid = discid
-        result = response.get("result", {})
-        data = result.get("data")
+        result = response.get("result")
 
-        if data:
+        # If MusicBrainz or Discogs found a match
+        if result and result.get("data"):
+            data = result.get("data")
             self.input_artist.setText(data.get("artist", ""))
             self.input_album.setText(data.get("title", ""))
             self.input_year.setText(str(data.get("year", "")))
@@ -428,8 +454,52 @@ class MainWindow(QMainWindow):
             
             self.status_label.setText(f"Status: Loaded metadata successfully via {result.get('source', 'Unknown')}.")
         else:
-            QMessageBox.information(self, "Not Found", "No automated match found. Switch to manual parsing.")
-            self.status_label.setText("Status: Metadata lookup returned no match.")
+            # Both MB and Discogs missed -> Check if AcoustID service is configured
+            if self.acoustid_key:
+                msg_box = QMessageBox(self)
+                msg_box.setIcon(QMessageBox.Icon.Question)
+                msg_box.setWindowTitle("AcoustID Fingerprinting")
+                msg_box.setText("AcoustID Fingerprinting process initializing...this may take a few minutes. Do you want to proceed?")
+                
+                btn_yes = msg_box.addButton("Yes", QMessageBox.ButtonRole.YesRole)
+                btn_no = msg_box.addButton("No", QMessageBox.ButtonRole.NoRole)
+                msg_box.setDefaultButton(btn_yes)
+                msg_box.exec()
+
+                if msg_box.clickedButton() == btn_yes:
+                    self.status_label.setText("Status: AcoustID Fingerprinting in progress...")
+                    self.btn_scan.setEnabled(False)
+                    self.btn_parser.setEnabled(False)
+                    
+                    # Launch AcoustID worker asynchronously
+                    self.acoustid_worker = AcoustIDWorker(self.meta_manager)
+                    self.acoustid_worker.progress.connect(self.on_meta_progress)
+                    self.acoustid_worker.finished.connect(self.on_acoustid_finished)
+                    self.acoustid_worker.start()
+                    return
+
+            # User clicked No or AcoustID is not configured
+            self.status_label.setText("Status: No metadata found, please retry or use manual tracklist parser")
+    
+    def on_acoustid_finished(self, result):
+        self.btn_scan.setEnabled(True)
+        self.btn_parser.setEnabled(True)
+
+        data = result.get("data")
+        if data:
+            self.input_artist.setText(data.get("artist", ""))
+            self.input_album.setText(data.get("title", ""))
+            self.input_year.setText(str(data.get("year", "")))
+            
+            self.current_cover_url = data.get("cover_art_url")
+            self.load_cover_art(self.current_cover_url)
+            
+            tracks = data.get("tracklist", []) or data.get("tracks", [])
+            self.track_table.load_tracklist(tracks)
+            
+            self.status_label.setText("Status: Loaded metadata successfully via AcoustID.")
+        else:
+            self.status_label.setText("Status: No metadata found, please retry or use manual tracklist parser")
 
     def start_ripping(self):
         artist = self.input_artist.text().strip()
