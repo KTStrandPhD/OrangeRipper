@@ -14,6 +14,7 @@ from services.metadata_manager import MetadataManager
 from gui.widgets.metadata_table import MetadataTable
 from gui.widgets.parser_dialog import ParserDialog
 from gui.widgets.settings_dialog import SettingsDialog
+from gui.widgets.metadata_search_dialog import ManualSearchDialog
 from gui.workers import RipWorker
 
 def load_config():
@@ -178,29 +179,24 @@ class MainWindow(QMainWindow):
                     d_letter = chr(65 + letter)
                     drive_path = f"{d_letter}:\\"
                     
-                    # DRIVE_CDROM value is 5 in the Windows API
                     if ctypes.windll.kernel32.GetDriveTypeW(drive_path) == 5:
-                        # Check volume label to avoid virtual Windows installer ISOs (like CCOCOMA)
                         volume_name = ctypes.create_unicode_buffer(261)
                         ctypes.windll.kernel32.GetVolumeInformationW(
                             drive_path, volume_name, ctypes.sizeof(volume_name), None, None, None, None, 0
                         )
                         label = volume_name.value.upper()
                         
-                        # If it's an installer ISO, skip it if possible
                         if "CCOCOMA" in label or "WIN" in label:
                             continue
                             
                         cd_drives.append(d_letter)
             
-            # If we found a clean physical drive, return it (e.g., 'E')
             if cd_drives:
-                return cd_drives[-1]  # Usually the physical drive is the higher letter
+                return cd_drives[-1]
                 
         except Exception:
             pass
             
-        # Hard fallback to 'E' based on your VM layout if dynamic check hits a snag
         return "E"
 
     def check_disc_status(self):
@@ -217,13 +213,11 @@ class MainWindow(QMainWindow):
             disc_info = ripper.get_disc_info()
             current_discid = disc_info.get("discid") if disc_info else None
 
-            # Case 1: A disc was present, but now it's removed
             if self.last_discid is not None and current_discid is None:
                 self.clear_metadata()
                 self.status_label.setText("Status: Disc removed. Drive is empty.")
                 self.last_discid = None
 
-            # Case 2: A new disc was inserted
             elif current_discid is not None and current_discid != self.last_discid:
                 self.last_discid = current_discid
                 self.scan_cd()
@@ -312,13 +306,12 @@ class MainWindow(QMainWindow):
         self.btn_rip.clicked.connect(self.start_ripping)
         rip_layout.addWidget(self.btn_rip)
 
-        # Red Stop Button with Opacity Effect (Faint & disabled by default when idle)
         self.btn_stop = QPushButton("Stop")
         self.btn_stop.setStyleSheet("font-weight: bold; background-color: #cd5c5c; color: white; padding: 8px;")
         
         self.stop_opacity = QGraphicsOpacityEffect(self.btn_stop)
         self.btn_stop.setGraphicsEffect(self.stop_opacity)
-        self.stop_opacity.setOpacity(0.3)  # Faint muted placeholder state when idle
+        self.stop_opacity.setOpacity(0.3)
         self.btn_stop.setEnabled(False)
         
         self.btn_stop.clicked.connect(self.stop_ripping)
@@ -393,7 +386,7 @@ class MainWindow(QMainWindow):
                 
                 self.status_label.setText(f"Status: Loaded metadata successfully via Manual Text Parser ({len(tracks)} tracks).")
 
-    def scan_cd(self):
+    def scan_cd(self, user_query=None):
         drive_path = self.get_optical_drive()
         
         if platform.system() != "Windows" and not os.path.exists(drive_path):
@@ -402,19 +395,21 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Drive Warning", "CD Drive not detected. Please connect a drive.")
             return
 
-        self.clear_metadata()
+        if not user_query:
+            self.clear_metadata()
+            
         self.status_label.setText(f"Status: Scanning CD drive ({drive_path}) and querying databases...")
         
-        # Disable controls during asynchronous scan
         self.btn_scan.setEnabled(False)
         self.btn_parser.setEnabled(False)
 
-        current_artist = self.input_artist.text().strip()
-        current_album = self.input_album.text().strip()
-        query = {"artist": current_artist, "album": current_album} if (current_artist or current_album) else None
+        if not user_query:
+            current_artist = self.input_artist.text().strip()
+            current_album = self.input_album.text().strip()
+            user_query = {"artist": current_artist, "album": current_album} if (current_artist or current_album) else None
 
         # Launch background metadata worker thread
-        self.meta_worker = MetadataWorker(self.meta_manager, drive_path, user_query=query)
+        self.meta_worker = MetadataWorker(self.meta_manager, drive_path, user_query=user_query)
         self.meta_worker.progress.connect(self.on_meta_progress)
         self.meta_worker.finished.connect(self.on_meta_finished)
         self.meta_worker.start()
@@ -454,12 +449,25 @@ class MainWindow(QMainWindow):
             
             self.status_label.setText(f"Status: Loaded metadata successfully via {result.get('source', 'Unknown')}.")
         else:
-            # Both MB and Discogs missed -> Check if AcoustID service is configured
+            # 1. Trigger Manual Discogs Query Dialog FIRST when automated lookup fails
+            dialog = ManualSearchDialog(
+                self, 
+                initial_artist=self.input_artist.text().strip(), 
+                initial_album=self.input_album.text().strip()
+            )
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                custom_query = dialog.get_query_data()
+                if custom_query:
+                    self.status_label.setText("Status: Searching Discogs with custom manual query...")
+                    self.scan_cd(user_query=custom_query)
+                    return
+
+            # 2. If user cancels manual search, offer AcoustID as an optional secondary fallback (if configured)
             if self.acoustid_key:
                 msg_box = QMessageBox(self)
                 msg_box.setIcon(QMessageBox.Icon.Question)
                 msg_box.setWindowTitle("AcoustID Fingerprinting")
-                msg_box.setText("AcoustID Fingerprinting process initializing...this may take a few minutes. Do you want to proceed?")
+                msg_box.setText("No manual query provided. Run AcoustID Audio Fingerprinting instead?")
                 
                 btn_yes = msg_box.addButton("Yes", QMessageBox.ButtonRole.YesRole)
                 btn_no = msg_box.addButton("No", QMessageBox.ButtonRole.NoRole)
@@ -471,16 +479,29 @@ class MainWindow(QMainWindow):
                     self.btn_scan.setEnabled(False)
                     self.btn_parser.setEnabled(False)
                     
-                    # Launch AcoustID worker asynchronously
                     self.acoustid_worker = AcoustIDWorker(self.meta_manager)
                     self.acoustid_worker.progress.connect(self.on_meta_progress)
                     self.acoustid_worker.finished.connect(self.on_acoustid_finished)
                     self.acoustid_worker.start()
                     return
 
-            # User clicked No or AcoustID is not configured
-            self.status_label.setText("Status: No metadata found, please retry or use manual tracklist parser")
-    
+            self.status_label.setText("Status: No metadata found, please retry or use manual tracklist parser.")
+
+    def prompt_manual_discogs_search(self):
+        dialog = ManualSearchDialog(
+            self, 
+            initial_artist=self.input_artist.text().strip(), 
+            initial_album=self.input_album.text().strip()
+        )
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            custom_query = dialog.get_query_data()
+            if custom_query:
+                self.status_label.setText("Status: Searching Discogs with custom manual query...")
+                self.scan_cd(user_query=custom_query)
+                return
+
+        self.status_label.setText("Status: No metadata found, please retry or use manual tracklist parser.")
+
     def on_acoustid_finished(self, result):
         self.btn_scan.setEnabled(True)
         self.btn_parser.setEnabled(True)
@@ -499,7 +520,8 @@ class MainWindow(QMainWindow):
             
             self.status_label.setText("Status: Loaded metadata successfully via AcoustID.")
         else:
-            self.status_label.setText("Status: No metadata found, please retry or use manual tracklist parser")
+            # AcoustID also missed, fallback to manual query dialog
+            self.prompt_manual_discogs_search()
 
     def start_ripping(self):
         artist = self.input_artist.text().strip()
@@ -533,7 +555,6 @@ class MainWindow(QMainWindow):
         self.btn_rip.setEnabled(False)
         self.btn_rip.setText("Ripping in Progress...")
         
-        # Make Stop button fully opaque and active during ripping
         self.stop_opacity.setOpacity(1.0)
         self.btn_stop.setEnabled(True)
         
@@ -546,7 +567,6 @@ class MainWindow(QMainWindow):
         self.worker.start()
 
     def stop_ripping(self):
-        """Triggers cancellation of the active ripping worker."""
         if self.worker and self.worker.isRunning():
             self.worker.cancel()
             self.status_label.setText("Status: Cancelling rip...")
@@ -563,7 +583,6 @@ class MainWindow(QMainWindow):
         self.btn_rip.setEnabled(True)
         self.btn_rip.setText("Start Ripping")
         
-        # Return Stop button to faint and inactive when finished
         self.stop_opacity.setOpacity(0.3)
         self.btn_stop.setEnabled(False)
         
@@ -575,7 +594,6 @@ class MainWindow(QMainWindow):
             self.status_label.setText(f"Status: {message}")
 
     def show_donate_dialog(self):
-        """Displays a popup dialog with donation links and info."""
         dialog = QDialog(self)
         dialog.setWindowTitle("Support OrangeRipper")
         dialog.setFixedSize(600, 360)

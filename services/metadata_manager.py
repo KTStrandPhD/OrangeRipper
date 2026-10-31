@@ -14,18 +14,34 @@ class MetadataManager:
     def fetch_metadata_for_cd(self, discid: str, user_query: dict = None):
         """Queries MusicBrainz and Discogs. Returns match or None if fallback is needed."""
         print("[1/2] Querying MusicBrainz via DiscID...")
-        #mb_result = None                             # comment the following line and uncomment this line to turn off musicbrainz search
         mb_result = self.mb_service.lookup_by_discid(discid)
         if mb_result:
             print(" -> Found match on MusicBrainz!")
             return {"source": "MusicBrainz", "data": mb_result}
 
         print("[2/2] MusicBrainz returned no match. Trying Discogs...")
-        if self.discogs_service and user_query:
+        if self.discogs_service:
+            # Ensure user_query is at least an empty dict to prevent TypeErrors[cite: 9]
+            query = user_query or {}
+            
+            # Extract physical track count and optional drive details[cite: 9]
+            expected_track_count = None
+            try:
+                ripper = CDRipper()
+                disc_info = ripper.get_disc_info()
+                if disc_info and "tracks" in disc_info:
+                    expected_track_count = len(disc_info["tracks"])
+            except Exception as e:
+                print(f" -> Could not read physical track count for filtering: {e}")
+
+            print(f" -> Searching Discogs with query: {query}, expected tracks: {expected_track_count}")
+
             discogs_results = self.discogs_service.search_release(
-                artist=user_query.get("artist"),
-                album=user_query.get("album"),
-                catno=user_query.get("catno")
+                artist=query.get("artist"),
+                album=query.get("album"),
+                catno=query.get("catno"),
+                release_id=query.get("release_id"),
+                expected_track_count=expected_track_count
             )
             if discogs_results:
                 print(" -> Found match on Discogs!")
@@ -35,7 +51,7 @@ class MetadataManager:
         return None
 
     def fetch_acoustid_metadata(self):
-        """Specifically executes the AcoustID sample rip and fingerprinting flow."""
+        """Specifically executes the AcoustID sample rip and fingerprinting flow[cite: 9]."""
         if not self.acoustid_service:
             return {"source": "None", "data": None}
 
@@ -68,7 +84,7 @@ class MetadataManager:
         return {"source": "None", "data": None}
 
     def _format_acoustid_result(self, matches: list) -> dict:
-        """Transforms raw AcoustID match results into a complete release structure using MusicBrainz."""
+        """Transforms raw AcoustID match results into a complete release structure using MusicBrainz[cite: 9]."""
         if not matches:
             return None
 

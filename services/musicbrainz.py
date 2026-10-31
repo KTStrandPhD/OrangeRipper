@@ -1,7 +1,7 @@
 import musicbrainzngs
 
 class MusicBrainzService:
-    def __init__(self, app_name="OrangeRipper", version="0.1", contact="your-email@example.com"):
+    def __init__(self, app_name="OrangeRipper", version="0.1", contact="KTStrandPhD@github.com"): # Use a valid domain/email
         musicbrainzngs.set_useragent(app_name, version, contact)
 
     @staticmethod
